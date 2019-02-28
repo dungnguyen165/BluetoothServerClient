@@ -1,7 +1,6 @@
 package com.dungnguyen.bluetoothserverclient
 
-import android.bluetooth.BluetoothAdapter
-import android.bluetooth.BluetoothManager
+import android.bluetooth.*
 import android.bluetooth.le.*
 import android.content.Context
 import android.content.Intent
@@ -10,8 +9,10 @@ import android.os.Build
 import android.support.v7.app.AppCompatActivity
 import android.os.Bundle
 import android.os.Handler
+import android.os.ParcelUuid
 import android.support.annotation.RequiresApi
 import android.util.Log
+import java.util.*
 import java.util.jar.Manifest
 
 class ClientActivity : AppCompatActivity() {
@@ -29,6 +30,8 @@ class ClientActivity : AppCompatActivity() {
     lateinit var mScanCallback: ScanCallback
     lateinit var mBluetoothLeScanner: BluetoothLeScanner
     lateinit var mHandler: Handler
+    lateinit var mGatt: BluetoothGatt
+    var mConnected = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -46,7 +49,11 @@ class ClientActivity : AppCompatActivity() {
 
     fun startScan() {
         if (!hasPermission() || mScanning) return
-        var filters = listOf<ScanFilter>()
+        val filters = mutableListOf<ScanFilter>()
+        var scanFilter = ScanFilter.Builder()
+            .setServiceUuid(ParcelUuid(UUID.fromString("abc")))
+            .build()
+        filters.add(scanFilter)
         var setting = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_POWER).build()
 
         mScanResults = HashMap()
@@ -95,9 +102,44 @@ class ClientActivity : AppCompatActivity() {
         }
 
         fun addScanResult(result: ScanResult) {
-            var device = result.device
-            var deviceAddress = device.address
-            mScanResults[deviceAddress] = device
+//            var device = result.device
+//            var deviceAddress = device.address
+//            mScanResults[deviceAddress] = device
+
+            stopScan()
+            var bluetoothDevice = result.device
+            connectDevice(bluetoothDevice)
+        }
+    }
+
+    fun connectDevice(device: BluetoothDevice) {
+        var gattClientCallBack = GattClientCallBack()
+        mGatt = device.connectGatt(this, false, gattClientCallBack)
+    }
+
+    inner class GattClientCallBack: BluetoothGattCallback() {
+        override fun onConnectionStateChange(gatt: BluetoothGatt?, status: Int, newState: Int) {
+            super.onConnectionStateChange(gatt, status, newState)
+            if (status == BluetoothGatt.GATT_FAILURE) {
+                disconnectGattServer()
+                return
+            } else if (status != BluetoothGatt.GATT_SUCCESS) {
+                disconnectGattServer()
+                return
+            }
+            if (newState == BluetoothProfile.STATE_CONNECTED) {
+                mConnected = true
+            } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                disconnectGattServer()
+            }
+        }
+    }
+
+    private fun disconnectGattServer() {
+        mConnected = false
+        if (mGatt != null) {
+            mGatt.disconnect()
+            mGatt.close()
         }
     }
 
