@@ -12,11 +12,11 @@ import android.support.v7.app.AppCompatActivity
 import android.os.Bundle
 import android.os.ParcelUuid
 import android.util.Log
+import kotlinx.android.synthetic.main.activity_server.*
 import java.util.*
 
 class ServerActivity : AppCompatActivity() {
 
-    val SERVICE_UUID: UUID = UUID.fromString("abc")
     val TAG = "ServerActivity"
 
     lateinit var mBluetoothManger: BluetoothManager
@@ -77,7 +77,7 @@ class ServerActivity : AppCompatActivity() {
             .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_LOW)
             .build()
 
-        var parcelUuid = ParcelUuid(SERVICE_UUID)
+        var parcelUuid = ParcelUuid(Constants.SERVICE_UUID)
         var data = AdvertiseData.Builder()
             .setIncludeDeviceName(true)
             .addServiceUuid(parcelUuid)
@@ -88,7 +88,13 @@ class ServerActivity : AppCompatActivity() {
     }
 
     private fun setupServer() {
-        var service = BluetoothGattService(SERVICE_UUID, BluetoothGattService.SERVICE_TYPE_PRIMARY)
+        var service = BluetoothGattService(Constants.SERVICE_UUID, BluetoothGattService.SERVICE_TYPE_PRIMARY)
+        var writeCharacteristic = BluetoothGattCharacteristic(
+            Constants.CHARACTERISTIC_ECHO_UUID,
+            BluetoothGattCharacteristic.PROPERTY_WRITE,
+            BluetoothGattCharacteristic.PERMISSION_WRITE
+        )
+        service.addCharacteristic(writeCharacteristic)
         mGattServer.addService(service)
     }
 
@@ -99,6 +105,44 @@ class ServerActivity : AppCompatActivity() {
                 mDevices.add(device)
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 mDevices.remove(device)
+            }
+        }
+
+        override fun onCharacteristicWriteRequest(
+            device: BluetoothDevice?,
+            requestId: Int,
+            characteristic: BluetoothGattCharacteristic?,
+            preparedWrite: Boolean,
+            responseNeeded: Boolean,
+            offset: Int,
+            value: ByteArray?
+        ) {
+            super.onCharacteristicWriteRequest(
+                device,
+                requestId,
+                characteristic,
+                preparedWrite,
+                responseNeeded,
+                offset,
+                value
+            )
+            if (characteristic != null) {
+                if (characteristic.uuid.equals(Constants.CHARACTERISTIC_ECHO_UUID)) {
+                    mGattServer.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
+                    if (value != null) {
+                        var messageString= String(value, charset("UTF-8"))
+                        Log.d(TAG, "$messageString")
+                        var length: Int = value.size
+                        var reversed = ByteArray(length)
+                        for (i in 0..(length - 1)) {
+                            reversed[i] = value[length - (i + 1)]
+                        }
+                        characteristic.value = reversed
+                        for (device in mDevices) {
+                            mGattServer.notifyCharacteristicChanged(device, characteristic, false)
+                        }
+                    }
+                }
             }
         }
     }

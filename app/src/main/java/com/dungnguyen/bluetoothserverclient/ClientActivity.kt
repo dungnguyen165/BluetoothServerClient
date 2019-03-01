@@ -10,10 +10,11 @@ import android.support.v7.app.AppCompatActivity
 import android.os.Bundle
 import android.os.Handler
 import android.os.ParcelUuid
-import android.support.annotation.RequiresApi
 import android.util.Log
+import kotlinx.android.synthetic.main.activity_client.*
+import java.io.UnsupportedEncodingException
 import java.util.*
-import java.util.jar.Manifest
+
 
 class ClientActivity : AppCompatActivity() {
 
@@ -22,7 +23,6 @@ class ClientActivity : AppCompatActivity() {
     val TAG = "ClientActivity"
     val REQUET_ENABLE_BT = 1
     val REQUEST_FINE_LOCATION = 2
-    val SCAN_PERIOD: Long = 10000
 
 
     var mScanning = false
@@ -32,12 +32,29 @@ class ClientActivity : AppCompatActivity() {
     lateinit var mHandler: Handler
     lateinit var mGatt: BluetoothGatt
     var mConnected = false
+    var mEchoInitialized = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_client)
         val bluetoothManager: BluetoothManager = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
         mBluetoothAdapter = bluetoothManager.adapter
+
+        send_message_button.setOnClickListener {
+            sendMessage()
+        }
+
+        start_scanning_button.setOnClickListener {
+            startScan()
+        }
+
+        stop_scanning_button.setOnClickListener {
+            stopScan()
+        }
+
+        disconnect_button.setOnClickListener {
+            disconnectGattServer()
+        }
     }
 
     override fun onResume() {
@@ -51,7 +68,7 @@ class ClientActivity : AppCompatActivity() {
         if (!hasPermission() || mScanning) return
         val filters = mutableListOf<ScanFilter>()
         var scanFilter = ScanFilter.Builder()
-            .setServiceUuid(ParcelUuid(UUID.fromString("abc")))
+            .setServiceUuid(ParcelUuid(Constants.SERVICE_UUID))
             .build()
         filters.add(scanFilter)
         var setting = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_POWER).build()
@@ -62,7 +79,7 @@ class ClientActivity : AppCompatActivity() {
         mBluetoothLeScanner.startScan(filters, setting, mScanCallback)
         mScanning = true
         mHandler = Handler()
-        mHandler.postDelayed(this::stopScan, SCAN_PERIOD)
+        mHandler.postDelayed(this::stopScan, Constants.SCAN_PERIOD)
     }
 
     fun stopScan() {
@@ -86,6 +103,7 @@ class ClientActivity : AppCompatActivity() {
         override fun onScanResult(callbackType: Int, result: ScanResult?) {
             if (result != null) {
                 addScanResult(result)
+                Log.d(TAG, "Scan result: ${result.toString()}")
             }
         }
 
@@ -94,6 +112,7 @@ class ClientActivity : AppCompatActivity() {
                 for (result in results) {
                     addScanResult(result)
                 }
+                Log.d(TAG, "Scan results: ${results.toString()}")
             }
         }
 
@@ -108,6 +127,7 @@ class ClientActivity : AppCompatActivity() {
 
             stopScan()
             var bluetoothDevice = result.device
+            Log.d(TAG, "Connecting to device: ${result.device}")
             connectDevice(bluetoothDevice)
         }
     }
@@ -121,21 +141,80 @@ class ClientActivity : AppCompatActivity() {
         override fun onConnectionStateChange(gatt: BluetoothGatt?, status: Int, newState: Int) {
             super.onConnectionStateChange(gatt, status, newState)
             if (status == BluetoothGatt.GATT_FAILURE) {
+                Log.d(TAG,"Disconnect Server: GATT_FAILURE")
                 disconnectGattServer()
                 return
             } else if (status != BluetoothGatt.GATT_SUCCESS) {
+                Log.d(TAG,"Disconnect Server: GATT_SUCCESS")
                 disconnectGattServer()
                 return
             }
             if (newState == BluetoothProfile.STATE_CONNECTED) {
+                Log.d(TAG, "Connected to server")
                 mConnected = true
+                gatt?.discoverServices()
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                Log.d(TAG, "Disconnected to server")
                 disconnectGattServer()
+            }
+        }
+
+        override fun onServicesDiscovered(gatt: BluetoothGatt?, status: Int) {
+            super.onServicesDiscovered(gatt, status)
+            Log.d(TAG, "Service discovered")
+            if (status != BluetoothGatt.GATT_SUCCESS) {
+                return
+            }
+            val service = gatt?.getService(Constants.SERVICE_UUID)
+            Log.d(TAG, "Service: ${service.toString()}")
+            val characteristic = service?.getCharacteristic(Constants.CHARACTERISTIC_ECHO_UUID)
+            characteristic?.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+            Log.d(TAG, "mInitialized before: $mEchoInitialized")
+            mEchoInitialized = gatt!!.setCharacteristicNotification(characteristic, true)
+            Log.d(TAG, "mInitialized after: $mEchoInitialized")
+        }
+
+        override fun onCharacteristicChanged(gatt: BluetoothGatt?, characteristic: BluetoothGattCharacteristic?) {
+            super.onCharacteristicChanged(gatt, characteristic)
+            Log.d("ClientActivity", "Characteristic send changed")
+            if (characteristic != null) {
+                var messageBytes = characteristic.value
+                lateinit var messageString: String
+                try {
+                    messageString = String(messageBytes, charset("UTF-8"))
+                } catch (ex: UnsupportedEncodingException) {
+                    Log.d("ClientActivity", "Unable to convert message byte to string")
+                }
+                Log.d("ClientActivity", "Received message: $messageString")
             }
         }
     }
 
+    fun sendMessage() {
+        if (!mConnected || !mEchoInitialized) {
+            Log.d(TAG, "Cannot send message, connected: $mConnected, minitialized: $mEchoInitialized")
+            return
+        }
+        Log.d(TAG, "Sending message")
+        var service = mGatt.getService(Constants.SERVICE_UUID)
+        var characteristic = service.getCharacteristic(Constants.CHARACTERISTIC_ECHO_UUID)
+        var message = message_edit_text.text.toString()
+        var messageByte = ByteArray(0)
+        try {
+            messageByte = message.toByteArray(charset("UTF-8"))
+        } catch (ex: UnsupportedEncodingException) {
+            Log.d("ClientActivity", "Failed to convert message string to byte array.")
+        }
+        characteristic.setValue(messageByte)
+        var success = mGatt.writeCharacteristic(characteristic)
+        if (success) {
+            Log.d(TAG, "Successfully sent message")
+        }
+
+    }
+
     private fun disconnectGattServer() {
+        Log.d(TAG, "disconnecting from server")
         mConnected = false
         if (mGatt != null) {
             mGatt.disconnect()
